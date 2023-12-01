@@ -1,25 +1,30 @@
 #!/bin/bash
+# Version: 2
+# Last Update: 2023.12.01
+# Author: mariano.canonero@gmail.com / Mariano Canonero
 
-# Created on 2019.08.10
-# Update on 2019.08.10 23pm
-# Aim: Send email with attachment from AWS SES
-# Coder : baturorkun@hmail.com / Batur Orkun
-
-## Global vars
+#------------------------------------------------------------------------------
+# HELP
+#------------------------------------------------------------------------------
 
 function usage() {
     echo "Usage: $0 [-h|--help ]
-        [-s|--subject <string> subject/title for email ]
-        [-f|--from <email> ]
-        [-r|--receiver|--receivers <emails> coma seperated emails ]
-        [-b|--body <string> ]
-        [-a|--attachment <filename> filepath ]
-        [--aws-region <string> Change Default AWS Region ]
-        [--aws_access_key_id <string> Change AWS Access Key ID ]
-        [--aws_secret_access_key <string> Change AWS Secret Access Key ]
-        " 1>&2;
+    [-s|--subject <string> subject/title for email ]
+    [-f|--from <email> ]
+    [-r|--receiver|--receivers <emails> coma separated emails ]
+    [-b|--body <string> ]
+    [-h|--html <html string> ]
+    [-a|--attachment|--attachments <filename> coma separated filepaths ]
+    [--aws-region <string> Change Default AWS Region ]
+    [--aws_access_key_id <string> Change AWS Access Key ID ]
+    [--aws_secret_access_key <string> Change AWS Secret Access Key ]
+    " 1>&2;
     exit 1;
 }
+
+#------------------------------------------------------------------------------
+# CHECK REQUIREMENTS
+#------------------------------------------------------------------------------
 
 function Error() {
     echo "Error: $1"
@@ -28,88 +33,144 @@ function Error() {
 
 function checkRequirements() {
 
-    which  aws
+    which aws
     if [ $? -ne 0 ]; then
         Error "AWS Cli tool is installed"
     fi
 
-    which  base64
+    which base64
     if [ $? -ne 0 ]; then
         Error "base64 tool is installed"
     fi
 }
 
-
-function sendMail() {
-
-    if [[ -z ${ATTACHMENT} ]]; then
-        ATTACHMENT=$BODY
-        FILENAME="Message.txt"
-    else
-        FILENAME=$(basename "${ATTACHMENT%}")
-        ATTACHMENT=`base64 -i $ATTACHMENT`
-    fi
-
-    TEMPLATE="ses-email-template.json"
-
-    TMPFILE="/tmp/ses-$(date +%s)"
-
-    cp $TEMPLATE $TMPFILE
-
-    sed -i -e "s/{SUBJECT}/$SUBJECT/g" $TMPFILE
-    sed -i -e "s/{FROM}/$FROM/g" $TMPFILE
-    sed -i -e "s/{RECVS}/$RECVS/g" $TMPFILE
-    sed -i -e "s/{BODY}/$BODY/g" $TMPFILE
-    sed -i -e "s/{FILENAME}/$FILENAME/g" $TMPFILE
-    sed -i -e "s/{ATTACHMENT}/$ATTACHMENT/g" $TMPFILE
-
-    aws ses send-raw-email --raw-message file://$TMPFILE
-}
-
-while :; do
-  case $1 in
-    -h|-\?|--help)
-        usage
-        ;;
-    -s|--subject)
-        SUBJECT=$2
-        shift
-        ;;
-    -f|--from)
-        FROM=$2
-        shift
-        ;;
-    -r|--receiver|--receivers)
-        RECVS=$2
-        shift
-        ;;
-    -b|--body)
-        BODY=`echo "$2" | base64`
-        shift
-        ;;
-    -a|--attachment)
-        ATTACHMENT=$2
-        shift
-        ;;
-    --aws-region)
-        AWS_DEFAULT_REGION=$2
-        shift
-        ;;
-    --aws_access_key_id)
-        AWS_ACCESS_KEY_ID=$2
-        shift
-        ;;
-    --aws_secret_access_key)
-        AWS_SECRET_ACCESS_KEY=$2
-        shift
-        ;;
-    *)  # Default case: No more options, so break out of the loop.
-        break
-  esac
-
-  shift
-done
-
 checkRequirements
 
-sendMail
+#------------------------------------------------------------------------------
+# PARSE PARAMETERS
+#------------------------------------------------------------------------------
+
+while :
+do
+	case $1 in
+		-h|-\?|--help)
+			usage
+			;;
+		-s|--subject)
+			SUBJECT=$2
+			printf '%s: %s\n' "SUBJECT" "$SUBJECT"
+			shift
+			;;
+		-f|--from)
+			FROM=$2
+			printf '%s: %s\n' "FROM" "$FROM"
+			shift
+			;;
+		-r|--receiver|--receivers)
+			RECVS=$2
+			printf '%s: %s\n' "TO" "$RECVS"
+			shift
+			;;
+		-b|--body)
+			BODY="$2"
+			printf '%s: %s\n' "BODY" "$BODY"
+			BODY="$(echo "$BODY" | base64 -w 0)"
+			shift
+			;;
+		-h|--html)
+			HTML="$2"
+			printf '%s: %s\n' "HTML" "$HTML"
+			HTML="$(echo "$HTML" | base64 -w 0)"
+			shift
+			;;
+		-a|--attachment)
+			ATTACHMENT=$2
+			printf '%s: %s\n' "ATTACHMENT" "$ATTACHMENT"
+			IFS=',' read -r -a ATTACHMENT_ARRAY <<< "$ATTACHMENT"
+			shift
+			;;
+		--aws-region)
+			export AWS_DEFAULT_REGION=$2
+			shift
+			;;
+		--aws_access_key_id)
+			export AWS_ACCESS_KEY_ID=$2
+			shift
+			;;
+		--aws_secret_access_key)
+			export AWS_SECRET_ACCESS_KEY=$2
+			shift
+			;;
+		*)  # Default case: No more options, so break out of the loop.
+			break
+	esac
+
+	shift
+done
+
+#------------------------------------------------------------------------------
+# INITIALIZE BLANK TEMPLATE
+#------------------------------------------------------------------------------
+
+mkdir -p ses-email-tmp
+TEMPLATE="ses-email-template.json"
+TMPFILE="ses-email-tmp/ses-$(date +"%Y%m%d_%H%M%S")"
+cp $TEMPLATE $TMPFILE
+
+#------------------------------------------------------------------------------
+# POPULATE TEMPLATE
+#------------------------------------------------------------------------------
+
+# Required Fields
+sed -i -e "s/{SUBJECT}/$SUBJECT/g" $TMPFILE
+sed -i -e "s/{FROM}/$FROM/g" $TMPFILE
+sed -i -e "s/{RECVS}/$RECVS/g" $TMPFILE
+
+# Define Body
+if [[ -n ${HTML} && -n ${BODY} ]]; then
+	TEXT_BODY+="Content-Type: text/plain\\\\nContent-Transfer-Encoding: base64\\\\n\\\\n$BODY"
+	HTML_BODY+="Content-Type: text/html\\\\nContent-Transfer-Encoding: base64\\\\n\\\\n$HTML"
+	BODY="$TEXT_BODY\\\\n\\\\n--SubNextPart\\\\n$HTML_BODY"
+elif [[ -n ${BODY} ]]; then
+	BODY=="Content-Type: text/plain\\\\nContent-Transfer-Encoding: base64\\\\n\\\\n$BODY"
+elif [[ -n ${HTML} ]]; then
+	BODY="Content-Type: text/html\\\\nContent-Transfer-Encoding: base64\\\\n\\\\n$HTML"
+else
+	echo "ERROR - Missing Body"
+	exit 1
+fi
+
+sed -i -e "s#{BODY}#$BODY#g" $TMPFILE
+
+# Attachments
+ATTACHMENTS="";
+if [[ -n ${ATTACHMENT} ]]; then
+	for ATTACHMENT_PATH in "${ATTACHMENT_ARRAY[@]}"; 
+	do
+		FILENAME=$(basename "${ATTACHMENT_PATH%}")
+		ATTACHMENT=`base64 -i -w 0 $ATTACHMENT_PATH`
+		ATTACHMENTS+="\\\\n\\\\n--NextPart\\\\nContent-Type: text/plain;\\\\nContent-Disposition: attachment; filename=\\\\\"${FILENAME}\\\\\"\\\\nContent-Transfer-Encoding: base64\\\\n\\\\n$ATTACHMENT"
+	done
+fi
+sed -i -e "s#{ATTACHMENTS}#$ATTACHMENTS#g" $TMPFILE
+
+#------------------------------------------------------------------------------
+# SEND EMAIL
+#------------------------------------------------------------------------------
+
+PATH=$PATH:/usr/local/bin
+export PATH
+
+AWS_CLI_VERSION=$(aws --version 2>&1 | cut -d " " -f1 | cut -d "/" -f2 | cut -d "." -f1)
+
+if [[ $AWS_CLI_VERSION -eq 1 ]]; then
+	echo "AWS_CLI_VERSION = 1"
+	aws ses send-raw-email --raw-message file://$TMPFILE
+elif [[ AWS_CLI_VERSION -eq 2 ]]; then
+	echo "AWS_CLI_VERSION = 2"
+	aws ses send-raw-email --cli-binary-format raw-in-base64-out --raw-message file://$TMPFILE
+else
+	echo "ERROR - AWS version not found"
+fi
+
+#------------------------------------------------------------------------------
